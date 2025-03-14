@@ -867,12 +867,19 @@ if __name__ == '__main__':
     # This will run without warnings
     port = int(os.environ.get('PORT', 8081))
     
-    # Set Flask env to development (silences production warnings)
-    os.environ['FLASK_ENV'] = 'production'
+    # Determine if in production environment
+    is_production = os.environ.get('RENDER', False)
     
-    # Run with log level warning to suppress info messages
+    # Silence logging
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    if is_production:
+        # Use Waitress in production
+        from waitress import serve
+        print(f"Starting production server on port {port}")
+        serve(app, host='0.0.0.0', port=port)
+    else:
+        # Use development server locally
+        socketio.run(app, host='0.0.0.0', port=port, debug=False)

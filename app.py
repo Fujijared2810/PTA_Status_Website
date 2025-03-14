@@ -868,7 +868,7 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8081))
     
     # Set Flask env to development (silences production warnings)
-    os.environ['FLASK_ENV'] = 'development'
+    os.environ['FLASK_ENV'] = 'production'
     
     # Run with log level warning to suppress info messages
     import logging

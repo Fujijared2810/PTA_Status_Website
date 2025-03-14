@@ -864,6 +864,15 @@ if __name__ == '__main__':
     monitor_thread = threading.Thread(target=check_bot_status, daemon=True)
     monitor_thread.start()
     
-    # This will run in both local development and on Render
+    # This will run without warnings
     port = int(os.environ.get('PORT', 8081))
-    socketio.run(app, host='0.0.0.0', port=port)
+    
+    # Set Flask env to development (silences production warnings)
+    os.environ['FLASK_ENV'] = 'development'
+    
+    # Run with log level warning to suppress info messages
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)

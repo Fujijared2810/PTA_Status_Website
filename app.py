@@ -864,6 +864,6 @@ if __name__ == '__main__':
     monitor_thread = threading.Thread(target=check_bot_status, daemon=True)
     monitor_thread.start()
     
-    # Run the socketio app
+    # This will run in both local development and on Render
     port = int(os.environ.get('PORT', 8081))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    socketio.run(app, host='0.0.0.0', port=port)

@@ -253,30 +253,45 @@ VERIFY_PAGE = '''
         
         <form id="verification-form" method="POST" action="/verify-human">
             <div class="cf-turnstile" data-sitekey="{{ site_key }}" data-callback="turnstileCallback"></div>
+            <input type="hidden" name="cf-turnstile-response" id="cf-turnstile-response">
             <button type="submit" id="submit-button" disabled>Continue to Site</button>
         </form>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // For debugging - if in debug mode with no key, just enable the button
-            if ("{{ site_key }}" === "") {
-                document.getElementById('submit-button').disabled = false;
-            }
+            // Check if site key is available
+            const siteKey = "{{ site_key }}";
             
-            // Add hidden field for token
-            const form = document.getElementById('verification-form');
-            const hiddenField = document.createElement('input');
-            hiddenField.type = 'hidden';
-            hiddenField.name = 'cf-turnstile-response';
-            hiddenField.id = 'cf-turnstile-response';
-            form.appendChild(hiddenField);
+            if (!siteKey || siteKey === "") {
+                // Site key is missing - provide a fallback method
+                console.error("Cloudflare Turnstile site key is missing");
+                document.getElementById('submit-button').disabled = false;
+                document.getElementById('cf-turnstile-response').value = "debug-mode-token";
+                
+                // Display a warning
+                const turnstileDiv = document.querySelector('.cf-turnstile');
+                turnstileDiv.innerHTML = '<div style="color: orange; padding: 20px; border: 1px dashed orange; text-align: center;">⚠️ Verification widget unavailable - debug mode enabled</div>';
+            }
         });
         
+        // Safe callback function that won't crash if Turnstile fails to load
         function turnstileCallback(token) {
-            document.getElementById('cf-turnstile-response').value = token;
-            document.getElementById('submit-button').disabled = false;
+            if (token) {
+                console.log("Turnstile verification completed");
+                document.getElementById('cf-turnstile-response').value = token;
+                document.getElementById('submit-button').disabled = false;
+            }
         }
+        
+        // Catch any Turnstile errors
+        window.addEventListener('error', function(e) {
+            if (e.message && e.message.includes('Turnstile')) {
+                console.log("Caught Turnstile error:", e.message);
+                document.getElementById('submit-button').disabled = false;
+                document.getElementById('cf-turnstile-response').value = "error-fallback-token";
+            }
+        });
     </script>
 </body>
 </html>
@@ -1195,19 +1210,39 @@ def home():
 
 @app.route('/verify-human', methods=['POST'])
 def verify_human():
+    print("Form data received:", request.form)
     token = request.form.get('cf-turnstile-response')
+    
+    # Special handling for debug mode and local development
+    if token == "debug-mode-token" and (DEBUG_MODE or not TURNSTILE_SITE_KEY):
+        print("Debug mode token accepted")
+        next_url = session.get('next', url_for('home'))
+        response = redirect(next_url)
+        response.set_cookie('human_verified', '1', max_age=3600, httponly=True, samesite='Lax')
+        return response
+    
     if not token:
+        print("No token found in form data")
         return jsonify({'success': False, 'message': 'No token provided'}), 400
     
-    is_human = verify_turnstile_token(token)
+    print(f"Token received: {token[:10]}...")
+    
+    # Only verify token if we have a secret key
+    is_human = False
+    if TURNSTILE_SECRET_KEY:
+        is_human = verify_turnstile_token(token)
+        print(f"Verification result: {is_human}")
+    else:
+        # If no secret key is set, accept any non-empty token in debug mode
+        is_human = DEBUG_MODE
+        print(f"No secret key, debug mode verification: {is_human}")
+    
     if is_human:
-        # Set a cookie to remember verification
         next_url = session.get('next', url_for('home'))
         response = redirect(next_url)
         response.set_cookie('human_verified', '1', max_age=3600, httponly=True, samesite='Lax')
         return response
     else:
-        # If verification failed, redirect back to verification page
         flash('Verification failed. Please try again.')
         return redirect(url_for('verify_page'))
     

@@ -9,7 +9,16 @@ import platform
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'ptastatus-secret-key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# Initialize socketio differently based on environment
+is_production = os.environ.get('RENDER', False)
+if is_production:
+    # In production: use long polling only (no WebSockets)
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', 
+                       transport=['polling'], engineio_logger=False)
+else:
+    # In development: use default settings
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Configuration
 BOT_URL = os.environ.get('BOT_URL', "http://127.0.0.1:8081/")  # Use environment variable in production
@@ -1045,13 +1054,7 @@ if __name__ == '__main__':
         from waitress import serve
         print(f"Starting production server on port {port}")
         
-        # Use long polling instead of WebSockets in production with Waitress
-        socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
-        
-        # Ensure engineio is properly initialized
-        socketio.init_app(app, async_mode='threading')
-        
-        # Serve the application with Waitress
+        # Serve the application with Waitress (no need to redefine socketio)
         serve(app, host='0.0.0.0', port=port)
     else:
         # Use development server locally

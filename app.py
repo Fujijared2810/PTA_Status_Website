@@ -6,17 +6,10 @@ import threading
 from datetime import datetime
 import os
 import platform
-from flask import request, jsonify
-from flask import redirect, session, request, url_for
-from functools import wraps
-from flask_session import Session
-from flask import flash
+import pytz
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'ptastatus-secret-key'
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SECRET_KEY'] = 'ptastatus-secret-key'
-Session(app)
 
 # Initialize socketio differently based on environment
 is_production = os.environ.get('RENDER', False)
@@ -34,12 +27,10 @@ else:
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Configuration
-BOT_URL = os.environ.get('BOT_URL', "http://127.0.0.1:8081/")  # Use environment variable in production
+BOT_URL = os.environ.get('BOT_URL', "https://ptabot-status-website.onrender.com/")  # Use environment variable in production
 BOT_NAME = "@PTAStudentBot"  # Add this line
 TELEGRAM_BOT_LINK = "https://t.me/PTAStudentBot"  # Add this line - note: no @ symbol in the URL
-TURNSTILE_SITE_KEY = os.environ.get('TURNSTILE_SITE_KEY', '')
-TURNSTILE_SECRET_KEY = os.environ.get('TURNSTILE_SECRET_KEY', '')
-CHECK_INTERVAL = 10  # Check every 10 seconds for more responsive updates
+CHECK_INTERVAL = 1  # Check every 10 seconds for more responsive updates
 MAX_HISTORY_ENTRIES = 100
 
 # Status tracking
@@ -50,39 +41,25 @@ status_history = []
 uptime_percentage = 100.0
 start_time = datetime.now()
 
-def verify_turnstile_token(token):
-    """Verify Cloudflare Turnstile token with Cloudflare API"""
-    try:
-        data = {
-            'secret': TURNSTILE_SECRET_KEY,
-            'response': token,
-            'remoteip': request.remote_addr
-        }
-        response = requests.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data=data)
-        result = response.json()
-        return result.get('success', False)
-    except Exception as e:
-        print(f"Turnstile verification error: {e}")
-        return False
+def ph_time_format(dt):
+    """Convert datetime to Philippine time and format in 12-hour format"""
+    if dt is None:
+        return 'Never'
     
-# Add near the top of your file with other configuration
-DEBUG_MODE = not is_production  # True in development, False in production
-
-# Then modify the human_required decorator
-def human_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Skip verification in debug mode
-        if DEBUG_MODE and not TURNSTILE_SITE_KEY:
-            return f(*args, **kwargs)
-            
-        if request.cookies.get('human_verified') != '1':
-            # Store intended destination
-            session['next'] = request.url
-            return redirect(url_for('verify_page'))
-        return f(*args, **kwargs)
-    return decorated_function
-
+    # Convert to Philippine time
+    ph_tz = pytz.timezone('Asia/Manila')
+    
+    # Make sure datetime is timezone-aware
+    if dt.tzinfo is None:
+        # If no timezone info, assume it's in server local time
+        # and convert to UTC first
+        dt = datetime.fromtimestamp(dt.timestamp(), pytz.UTC)
+    
+    # Convert to Philippine time
+    dt_ph = dt.astimezone(ph_tz)
+    
+    # Format in 12-hour format with AM/PM
+    return dt_ph.strftime('%Y-%m-%d %I:%M:%S %p')
 
 def check_bot_status():
     global last_check, is_online, last_online, status_history, uptime_percentage
@@ -90,7 +67,7 @@ def check_bot_status():
     while True:
         try:
             # Record check time
-            check_time = datetime.now()
+            check_time = datetime.now(pytz.timezone('Asia/Manila'))
             last_check = check_time
             
             # Try to reach the bot URL
@@ -122,14 +99,14 @@ def check_bot_status():
             # Emit real-time update to all clients
             socketio.emit('status_update', {
                 'is_online': is_online,
-                'last_online': last_online.strftime('%Y-%m-%d %H:%M:%S') if last_online else 'Never',
-                'last_check': last_check.strftime('%Y-%m-%d %H:%M:%S') if last_check else 'Never',
+                'last_online': ph_time_format(last_online),
+                'last_check': ph_time_format(last_check),
                 'uptime_percentage': round(uptime_percentage, 2),
                 'server_time': f"{platform.system()} {platform.release()}",  # Update this line
                 'uptime': str(datetime.now() - start_time).split('.')[0],
                 'recent_history': [
                     {
-                        'timestamp': entry['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                        'timestamp': ph_time_format(entry['timestamp']),
                         'status': entry['status']
                     }
                     for entry in list(reversed(status_history))[:10]
@@ -154,14 +131,14 @@ def check_bot_status():
             # Emit error update
             socketio.emit('status_update', {
                 'is_online': False,
-                'last_online': last_online.strftime('%Y-%m-%d %H:%M:%S') if last_online else 'Never',
-                'last_check': last_check.strftime('%Y-%m-%d %H:%M:%S') if last_check else 'Never',
+                'last_online': ph_time_format(last_online),
+                'last_check': ph_time_format(last_check),
                 'uptime_percentage': round(uptime_percentage, 2),
                 'server_time': f"{platform.system()} {platform.release()}",  # Update this line
                 'uptime': str(datetime.now() - start_time).split('.')[0],
                 'recent_history': [
                     {
-                        'timestamp': entry['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                        'timestamp': ph_time_format(entry['timestamp']),
                         'status': entry['status']
                     }
                     for entry in list(reversed(status_history))[:10]
@@ -169,133 +146,6 @@ def check_bot_status():
             })
         
         time.sleep(CHECK_INTERVAL)
-
-VERIFY_PAGE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Verify - PTA Bot Status</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-    <style>
-        /* Copy relevant styles from STATUS_PAGE */
-        :root {
-            --success: #00c853;
-            --background: #0d1117;
-            --card-bg: #161b22;
-            --text: #e6edf3;
-            --text-muted: #8b949e;
-            --border: rgba(255, 255, 255, 0.1);
-            --accent: #30363d;
-        }
-        
-        body {
-            font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
-            background: var(--background);
-            color: var(--text);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 1rem;
-            line-height: 1.6;
-        }
-        
-        .container {
-            background-color: var(--card-bg);
-            border-radius: 8px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-            width: 90%;
-            max-width: 500px;
-            border: 1px solid var(--accent);
-            padding: 2rem;
-            text-align: center;
-        }
-        
-        h1 {
-            margin-bottom: 1rem;
-            color: var(--text);
-        }
-        
-        p {
-            margin-bottom: 2rem;
-            color: var(--text-muted);
-        }
-        
-        #verification-form {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        
-        button {
-            margin-top: 1.5rem;
-            padding: 0.75rem 1.5rem;
-            background: var(--success);
-            color: black;
-            border: none;
-            border-radius: 4px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-        
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Verification Required</h1>
-        <p>Please complete the verification below to access the PTA Bot Status page.</p>
-        
-        <form id="verification-form" method="POST" action="/verify-human">
-            <div class="cf-turnstile" data-sitekey="{{ site_key }}" data-callback="turnstileCallback"></div>
-            <input type="hidden" name="cf-turnstile-response" id="cf-turnstile-response">
-            <button type="submit" id="submit-button" disabled>Continue to Site</button>
-        </form>
-    </div>
-
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Check if site key is available
-            const siteKey = "{{ site_key }}";
-            
-            if (!siteKey || siteKey === "") {
-                // Site key is missing - provide a fallback method
-                console.error("Cloudflare Turnstile site key is missing");
-                document.getElementById('submit-button').disabled = false;
-                document.getElementById('cf-turnstile-response').value = "debug-mode-token";
-                
-                // Display a warning
-                const turnstileDiv = document.querySelector('.cf-turnstile');
-                turnstileDiv.innerHTML = '<div style="color: orange; padding: 20px; border: 1px dashed orange; text-align: center;">⚠️ Verification widget unavailable - debug mode enabled</div>';
-            }
-        });
-        
-        // Safe callback function that won't crash if Turnstile fails to load
-        function turnstileCallback(token) {
-            if (token) {
-                console.log("Turnstile verification completed");
-                document.getElementById('cf-turnstile-response').value = token;
-                document.getElementById('submit-button').disabled = false;
-            }
-        }
-        
-        // Catch any Turnstile errors
-        window.addEventListener('error', function(e) {
-            if (e.message && e.message.includes('Turnstile')) {
-                console.log("Caught Turnstile error:", e.message);
-                document.getElementById('submit-button').disabled = false;
-                document.getElementById('cf-turnstile-response').value = "error-fallback-token";
-            }
-        });
-    </script>
-</body>
-</html>
-'''
 
 # HTML template for status page (enhanced with real-time updates)
 STATUS_PAGE = '''
@@ -652,6 +502,17 @@ STATUS_PAGE = '''
             animation: tickerScan 2s infinite;
         }
 
+        .info-item.animate-in {
+            animation: fadeInUp 0.5s forwards;
+        }
+
+        @keyframes fadeInUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
         @keyframes tickerScan {
             0% { transform: translateX(-100%); }
             100% { transform: translateX(100%); }
@@ -718,15 +579,33 @@ STATUS_PAGE = '''
         }
 
         .history-header {
-            font-size: 1rem; /* Reduced from 1.1rem */
-            margin-bottom: 0.75rem; /* Reduced from 1rem */
-            padding-bottom: 0.4rem; /* Reduced from 0.5rem */
-            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            position: relative;
-            z-index: 1;
         }
+
+        .toggle-icon {
+            transition: transform 0.3s ease;
+        }
+
+        .history-entries {
+            max-height: 500px;
+            opacity: 1;
+            overflow: hidden;
+            transition: max-height 0.5s ease, opacity 0.4s ease;
+        }
+
+        .history-entries.collapsed {
+            max-height: 0;
+            opacity: 0;
+        }
+
+        .history-header[data-expanded="true"] .toggle-icon {
+            transform: rotate(180deg);
+        }
+
 
         .history-header i {
             margin-right: 0.5rem;
@@ -743,11 +622,17 @@ STATUS_PAGE = '''
             background-color: #181e25;
             border-left: 3px solid transparent;
             animation: slideIn 0.3s ease;
-            opacity: 0;
+            opacity: 1;
             animation-fill-mode: forwards;
             position: relative;
             z-index: 1;
             transition: transform 0.2s ease;
+        }
+
+        /* Add new class for animation */
+        .animate-entry {
+            animation: slideIn 0.3s ease forwards;
+            opacity: 0;
         }
 
         .history-entry:hover {
@@ -881,7 +766,7 @@ STATUS_PAGE = '''
             background-color: #000;
             border-radius: 50%;
             top: 50%;
-            left: 8px;
+            left: 1px;
             transform: translateY(-50%);
             animation: blink 2s infinite;
         }
@@ -981,10 +866,53 @@ STATUS_PAGE = '''
         .status-card, .uptime-bar, .info-section, .history-section, .connection-status {
             margin-bottom: 0.75rem; /* Further reduced margins */
         }
+
+        @keyframes typingEffect {
+            from { width: 0 }
+            to { width: 58% }
+        }
+
+        @keyframes blinkCursor {
+            from, to { border-right-color: transparent }
+            50% { border-right-color: var(--text) }
+        }
+
+        .typing-animation {
+            display: inline-block;
+            overflow: hidden;
+            white-space: nowrap;
+            border-right: 2px solid var(--text);
+            width: 0;
+            animation: 
+                typingEffect 1.5s ease forwards,
+                blinkCursor 0.75s step-end infinite;
+        }
+
+        @keyframes uptimeChange {
+            0% { filter: brightness(1); }
+            50% { filter: brightness(1.5); }
+            100% { filter: brightness(1); }
+        }
+
+        .uptime-change {
+            animation: uptimeChange 1s ease;
+        }
+
+
+        @keyframes statusPulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); box-shadow: 0 0 10px var(--success); }
+            100% { transform: scale(1); }
+        }
+
+        .status-change-pulse {
+            animation: statusPulse 0.7s ease;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
 <body>
+    <div id="particles-js" class="particles-container"></div>
     <div class="container">
         <div class="header">
             <div class="logo"><i class="fas fa-chart-line"></i> Prodigy Trading Academy</div>
@@ -1011,7 +939,7 @@ STATUS_PAGE = '''
                 </p>
                 
                 <div id="last-seen-container" style="{{ 'display: none;' if is_online else '' }}">
-                    <p class="last-seen"><i class="fas fa-clock"></i> Last seen online: <span id="last-seen">{{ last_online.strftime('%Y-%m-%d %H:%M:%S') if last_online else 'Never' }}</span></p>
+                    <p class="last-seen"><i class="fas fa-clock"></i> Last seen online: <span id="last-seen">{{ ph_time_format(last_online) }}</span></p>
                 </div>
             </div>
             
@@ -1039,7 +967,7 @@ STATUS_PAGE = '''
                     
                     <div class="info-item">
                         <span class="info-label"><i class="fas fa-history"></i> Last Check</span>
-                        <span id="last-check" class="info-value">{{ last_check.strftime('%Y-%m-%d %H:%M:%S') if last_check else 'Never' }}</span>
+                        <span id="last-check" class="info-value">{{ ph_time_format(last_check) }}</span>
                     </div>
                     
                     <div class="info-item">
@@ -1050,12 +978,15 @@ STATUS_PAGE = '''
             </div>
             
             <div class="history-section">
-                <h2 class="history-header"><i class="fas fa-chart-line"></i> Recent Status History</h2>
-                <div id="history-entries">
+                <h2 class="history-header" id="history-toggle">
+                    <i class="fas fa-chart-line"></i> Recent Status History
+                    <span class="toggle-icon"><i class="fas fa-chevron-down"></i></span>
+                </h2>
+                <div id="history-entries" class="history-entries collapsed">
                     {% for entry in status_history|reverse %}
                         {% if loop.index <= 10 %}
                             <div class="history-entry {{ 'online' if entry.status else 'offline' }}" style="animation-delay: {{ loop.index * 0.1 }}s;">
-                                <span class="history-timestamp">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+                                <span class="history-timestamp">{{ ph_time_format(entry.timestamp) }}</span>
                                 <span class="history-status {{ 'online' if entry.status else 'offline' }}">
                                     <i class="fas {{ 'fa-circle-check' if entry.status else 'fa-circle-exclamation' }}"></i>
                                     {{ "ONLINE" if entry.status else "OFFLINE" }}
@@ -1068,7 +999,7 @@ STATUS_PAGE = '''
             
             <div class="connection-status">
                 <div>
-                    <i class="fas fa-clock"></i> Last update: <span id="last-update">{{ datetime.now().strftime('%H:%M:%S') }}</span>
+                    <i class="fas fa-clock"></i> Last update: <span id="last-update">{{ ph_time_format(datetime.now()).split(' ')[1] }}</span>
                 </div>
                 <div id="connection-status" class="connected">
                     <i class="fas fa-plug"></i> Connecting to server...
@@ -1123,55 +1054,164 @@ STATUS_PAGE = '''
                 // Update status indicator
                 const statusElement = document.getElementById('status');
                 const statusMessageElement = document.getElementById('status-message');
+                const lastSeenContainer = document.getElementById('last-seen-container');
                 
-                if (data.is_online) {
-                    statusElement.innerHTML = '<i class="fas fa-circle-check mr-2"></i> ONLINE';
-                    statusElement.className = 'status-indicator online';
-                    statusMessageElement.textContent = 'The PTA Student Bot is currently running and serving members.';
-                    document.getElementById('last-seen-container').style.display = 'none';
-                } else {
-                    statusElement.innerHTML = '<i class="fas fa-circle-exclamation mr-2"></i> OFFLINE';
-                    statusElement.className = 'status-indicator offline';
-                    statusMessageElement.textContent = 'The PTA Bot is currently offline or experiencing issues.';
-                    document.getElementById('last-seen-container').style.display = 'block';
-                    document.getElementById('last-seen').textContent = data.last_online;
+                // Check if status changed
+                if (statusElement.className !== `status-indicator ${data.is_online ? 'online' : 'offline'}`) {
+                    // Update class name to reflect new status
+                    statusElement.className = `status-indicator ${data.is_online ? 'online' : 'offline'}`;
+                    
+                    // Update icon and text
+                    statusElement.innerHTML = `<i class="fas ${data.is_online ? 'fa-circle-check' : 'fa-circle-exclamation'} mr-2"></i>
+                                            ${data.is_online ? 'ONLINE' : 'OFFLINE'}`;
+                    
+                    // Update status message
+                    statusMessageElement.textContent = data.is_online ? 
+                        "The PTA Student Bot is currently running and serving members." : 
+                        "The PTA Student Bot is currently offline or experiencing issues.";
+                        
+                    // Show/hide last seen container
+                    lastSeenContainer.style.display = data.is_online ? 'none' : '';
+                    
+                    // If offline, update the last seen time
+                    if (!data.is_online && document.getElementById('last-seen')) {
+                        document.getElementById('last-seen').textContent = data.last_online;
+                    }
+                    
+                    // Add pulse animation
+                    statusElement.classList.add('status-change-pulse');
+                    setTimeout(() => statusElement.classList.remove('status-change-pulse'), 700);
                 }
                 
                 // Update info section
                 document.getElementById('server-time').textContent = data.server_time;
                 document.getElementById('last-check').textContent = data.last_check;
                 document.getElementById('uptime').textContent = data.uptime;
-                
+
                 // Update uptime bar
+                function animateValue(obj, start, end, duration) {
+                    let startTimestamp = null;
+                    const step = (timestamp) => {
+                        if (!startTimestamp) startTimestamp = timestamp;
+                        const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                        const currentValue = start + progress * (end - start);
+                        obj.textContent = currentValue.toFixed(2) + '% Uptime';
+                        if (progress < 1) {
+                            window.requestAnimationFrame(step);
+                        }
+                    };
+                    window.requestAnimationFrame(step);
+                }
+
+                // Update uptime bar with animation
                 const uptimePercent = data.uptime_percentage;
-                document.getElementById('uptime-fill').style.width = uptimePercent + '%';
-                document.getElementById('uptime-text').textContent = uptimePercent.toFixed(2) + '% Uptime';
+                const uptimeFill = document.getElementById('uptime-fill');
+                const currentWidth = parseFloat(uptimeFill.style.width) || 0;
+
+                // Add flash effect if uptime changes significantly
+                if (Math.abs(uptimePercent - currentWidth) > 5) {
+                    uptimeFill.classList.add('uptime-change');
+                    setTimeout(() => uptimeFill.classList.remove('uptime-change'), 1000);
+                }
+
+                // Animate the width smoothly
+                const animateWidth = (element, start, end, duration) => {
+                    const startTime = performance.now();
+                    
+                    const updateWidth = (currentTime) => {
+                        const elapsedTime = currentTime - startTime;
+                        const progress = Math.min(elapsedTime / duration, 1);
+                        const easeProgress = 1 - Math.pow(1 - progress, 3); // Cubic ease out
+                        const currentWidth = start + (end - start) * easeProgress;
+                        
+                        element.style.width = `${currentWidth}%`;
+                        
+                        if (progress < 1) {
+                            requestAnimationFrame(updateWidth);
+                        }
+                    };
+                    
+                    requestAnimationFrame(updateWidth);
+                };
+
+                // Animate both the width and the text counter
+                animateWidth(uptimeFill, currentWidth, uptimePercent, 800);
+
+                // Animate the text counter
+                const uptimeText = document.getElementById('uptime-text');
+                const currentTextValue = parseFloat(uptimeText.textContent) || 0;
+                animateValue(uptimeText, currentTextValue, uptimePercent, 800);
                 
-                // Update history with animation
+                // Update history with animation only on changes
                 const historyContainer = document.getElementById('history-entries');
+                const previousTimestamps = Array.from(historyContainer.querySelectorAll('.history-entry')).map(
+                    entry => entry.querySelector('.history-timestamp').textContent
+                );
+
+                // Don't clear and rebuild on every update
+                if (historyContainer.childElementCount === 0 || 
+                    data.recent_history.some(entry => !previousTimestamps.includes(entry.timestamp))) {
+                    
+                    // Only rebuild if there are new entries
+                    historyContainer.innerHTML = '';
+                    
+                    data.recent_history.forEach((entry, index) => {
+                        const entryElement = document.createElement('div');
+                        entryElement.className = `history-entry ${entry.status ? 'online' : 'offline'}`;
+                        
+                        // Only apply animation class if first load or new entry
+                        if (previousTimestamps.length === 0 || !previousTimestamps.includes(entry.timestamp)) {
+                            entryElement.classList.add('animate-entry');
+                            entryElement.style.animationDelay = `${index * 0.1}s`;
+                        }
+                        
+                        const timestampSpan = document.createElement('span');
+                        timestampSpan.className = 'history-timestamp';
+                        timestampSpan.textContent = entry.timestamp;
+                        
+                        const statusSpan = document.createElement('span');
+                        statusSpan.className = `history-status ${entry.status ? 'online' : 'offline'}`;
+                        statusSpan.innerHTML = `<i class="fas ${entry.status ? 'fa-circle-check' : 'fa-circle-exclamation'}"></i> ${entry.status ? 'ONLINE' : 'OFFLINE'}`;
+                        
+                        entryElement.appendChild(timestampSpan);
+                        entryElement.appendChild(statusSpan);
+                        historyContainer.appendChild(entryElement);
+                    });
+                }
+                
+                // Update last update time
+                document.getElementById('last-update').textContent = new Intl.DateTimeFormat('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true,
+                    timeZone: 'Asia/Manila'
+                }).format(new Date());
+            });
+
+            // Update history with animation only on changes
+            const historyContainer = document.getElementById('history-entries');
+            const isCurrentlyExpanded = document.getElementById('history-toggle').getAttribute('data-expanded') === 'true';
+            const previousTimestamps = Array.from(historyContainer.querySelectorAll('.history-entry')).map(
+                entry => entry.querySelector('.history-timestamp').textContent
+            );
+
+            // Don't clear and rebuild on every update
+            if (historyContainer.childElementCount === 0 || 
+                data.recent_history.some(entry => !previousTimestamps.includes(entry.timestamp))) {
+                
+                // Only rebuild if there are new entries
                 historyContainer.innerHTML = '';
                 
                 data.recent_history.forEach((entry, index) => {
-                    const entryElement = document.createElement('div');
-                    entryElement.className = `history-entry ${entry.status ? 'online' : 'offline'}`;
-                    entryElement.style.animationDelay = `${index * 0.1}s`;
-                    
-                    const timestampSpan = document.createElement('span');
-                    timestampSpan.className = 'history-timestamp';
-                    timestampSpan.textContent = entry.timestamp;
-                    
-                    const statusSpan = document.createElement('span');
-                    statusSpan.className = `history-status ${entry.status ? 'online' : 'offline'}`;
-                    statusSpan.innerHTML = `<i class="fas ${entry.status ? 'fa-circle-check' : 'fa-circle-exclamation'}"></i> ${entry.status ? 'ONLINE' : 'OFFLINE'}`;
-                    
-                    entryElement.appendChild(timestampSpan);
-                    entryElement.appendChild(statusSpan);
-                    historyContainer.appendChild(entryElement);
+                    // Create entries as before...
+
+                    // Make sure entries stay collapsed if that was the current state
+                    if (!isCurrentlyExpanded) {
+                        historyContainer.classList.add('collapsed');
+                    }
                 });
-                
-                // Update last update time
-                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
-            });
+            }
             
             // Manual refresh button
             document.getElementById('refresh-btn').addEventListener('click', function() {
@@ -1180,13 +1220,35 @@ STATUS_PAGE = '''
                     location.reload();
                 }, 500);
             });
+
+            document.querySelectorAll('.info-item').forEach((item, index) => {
+                setTimeout(() => {
+                    item.classList.add('animate-in');
+                }, index * 150);
+            });
+
+        });
+        const historyToggle = document.getElementById('history-toggle');
+        const historyEntries = document.getElementById('history-entries');
+
+        historyToggle.addEventListener('click', function() {
+            const isExpanded = this.getAttribute('data-expanded') === 'true';
+            const newState = !isExpanded;
+            
+            this.setAttribute('data-expanded', newState);
+            
+            if (newState) {
+                historyEntries.classList.remove('collapsed');
+            } else {
+                historyEntries.classList.add('collapsed');
+            }
         });
     </script>
 </body>
 </html>
 '''
+
 @app.route('/')
-@human_required
 def home():
     # Get environment information
     environment_info = f"{platform.system()} {platform.release()}"
@@ -1205,50 +1267,9 @@ def home():
         start_time=start_time,
         datetime=datetime,
         str=str,
-        environment_info=environment_info
+        environment_info=environment_info,
+        ph_time_format=ph_time_format
     )
-
-@app.route('/verify-human', methods=['POST'])
-def verify_human():
-    print("Form data received:", request.form)
-    token = request.form.get('cf-turnstile-response')
-    
-    # Special handling for debug mode and local development
-    if token == "debug-mode-token" and (DEBUG_MODE or not TURNSTILE_SITE_KEY):
-        print("Debug mode token accepted")
-        next_url = session.get('next', url_for('home'))
-        response = redirect(next_url)
-        response.set_cookie('human_verified', '1', max_age=3600, httponly=True, samesite='Lax')
-        return response
-    
-    if not token:
-        print("No token found in form data")
-        return jsonify({'success': False, 'message': 'No token provided'}), 400
-    
-    print(f"Token received: {token[:10]}...")
-    
-    # Only verify token if we have a secret key
-    is_human = False
-    if TURNSTILE_SECRET_KEY:
-        is_human = verify_turnstile_token(token)
-        print(f"Verification result: {is_human}")
-    else:
-        # If no secret key is set, accept any non-empty token in debug mode
-        is_human = DEBUG_MODE
-        print(f"No secret key, debug mode verification: {is_human}")
-    
-    if is_human:
-        next_url = session.get('next', url_for('home'))
-        response = redirect(next_url)
-        response.set_cookie('human_verified', '1', max_age=3600, httponly=True, samesite='Lax')
-        return response
-    else:
-        flash('Verification failed. Please try again.')
-        return redirect(url_for('verify_page'))
-    
-@app.route('/verify')
-def verify_page():
-    return render_template_string(VERIFY_PAGE, site_key=TURNSTILE_SITE_KEY)
 
 # Start monitoring thread
 @socketio.on('connect')

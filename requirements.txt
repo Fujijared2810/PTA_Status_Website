@@ -7,3 +7,4 @@ requests==2.26.0
 simple-websocket==0.5.1
 waitress==2.0.0
 flask-session
+pytz

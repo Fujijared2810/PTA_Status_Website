@@ -1041,10 +1041,12 @@ if __name__ == '__main__':
     log.setLevel(logging.ERROR)
     
     if is_production:
-        # Use Waitress in production
+        # Use Waitress in production with the correct WSGI app
         from waitress import serve
         print(f"Starting production server on port {port}")
-        serve(socketio.wsgi_app, host='0.0.0.0', port=port)  # Note the socketio.wsgi_app here
+        # Fix: Use the proper way to get the WSGI app for Socket.IO
+        app.wsgi_app = socketio.middleware(app.wsgi_app)
+        serve(app, host='0.0.0.0', port=port)
     else:
         # Use development server locally
         socketio.run(app, host='0.0.0.0', port=port, debug=False)

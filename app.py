@@ -907,7 +907,11 @@ STATUS_PAGE = '''
     
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            const socket = io();
+            // Create socket with polling transport only
+            const socket = io({
+                transports: ['polling'],
+                upgrade: false  // Disable transport upgrades
+            });
             let reconnectAttempts = 0;
             const maxReconnectAttempts = 5;
             

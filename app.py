@@ -9,10 +9,10 @@ import platform
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'ptastatus-secret-key'
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Configuration
-BOT_URL = os.environ.get('BOT_URL', "http://127.0.0.1:8080/")  # Use environment variable in production
+BOT_URL = os.environ.get('BOT_URL', "http://127.0.0.1:8081/")  # Use environment variable in production
 BOT_NAME = "@PTAStudentBot"  # Add this line
 TELEGRAM_BOT_LINK = "https://t.me/PTAStudentBot"  # Add this line - note: no @ symbol in the URL
 CHECK_INTERVAL = 10  # Check every 10 seconds for more responsive updates
@@ -122,28 +122,34 @@ STATUS_PAGE = '''
     <title>PTA Bot Status</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
+        /* Full stylesheet for the PTA Bot Status Monitor */
         :root {
-            --primary: #3b82f6;
-            --primary-dark: #2563eb;
-            --success: #10b981;
-            --danger: #ef4444;
-            --background: #0f172a;
-            --card-bg: rgba(30, 41, 59, 0.8);
-            --text: #f8fafc;
-            --text-muted: #94a3b8;
-            --border: rgba(148, 163, 184, 0.1);
+            /* Trading-focused color palette */
+            --success: #00c853;        /* Strong green for positive indicators */
+            --success-light: rgba(0, 200, 83, 0.15);
+            --danger: #ff3d00;         /* Bright red for negative indicators */
+            --danger-light: rgba(255, 61, 0, 0.15);
+            --background: #0d1117;     /* Darker black for background */
+            --card-bg: #161b22;        /* Elevated card background */
+            --card-bg-hover: #21262d;  /* Hover state for cards */
+            --text: #e6edf3;           /* Bright white text for readability */
+            --text-muted: #8b949e;     /* Secondary text */
+            --border: rgba(255, 255, 255, 0.1);
+            --accent: #30363d;         /* Border/accent color */
+            --accent-light: #484f58;   /* Lighter accent */
+            --chart-grid: #30363d;     /* Chart grid lines */
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
         }
-        
+
         body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+            background: var(--background);
             color: var(--text);
             min-height: 100vh;
             display: flex;
@@ -152,446 +158,619 @@ STATUS_PAGE = '''
             padding: 1rem;
             line-height: 1.6;
         }
-        
+
         .container {
             background-color: var(--card-bg);
-            border-radius: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
             width: 90%;
-            max-width: 850px;
-            overflow: hidden;
-            backdrop-filter: blur(10px);
-            border: 1px solid var(--border);
+            max-width: 900px;
+            border: 1px solid var(--accent);
             opacity: 0;
             transform: translateY(20px);
-            animation: fadeIn 0.6s forwards;
+            animation: fadeIn 0.5s forwards;
+            position: relative;
+            overflow: hidden;
         }
-        
+
         @keyframes fadeIn {
             to {
                 opacity: 1;
                 transform: translateY(0);
             }
         }
-        
+
+        /* Trading theme header with ticker-like styling */
         .header {
-            background: linear-gradient(to right, rgba(30, 41, 59, 0.8), rgba(30, 58, 138, 0.8));
-            padding: 2rem;
-            text-align: center;
+            background: linear-gradient(to right, #090c10, #161b22);
+            padding: 1.2rem 1.5rem; /* Reduced from 1.5rem 2rem */
             position: relative;
+            border-bottom: 1px solid var(--accent); /* Changed from 2px */
             overflow: hidden;
         }
-        
-        .header::before {
+
+        /* Create chart grid in header background */
+        .header::after {
             content: '';
             position: absolute;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(148, 163, 184, 0.1) 0%, rgba(148, 163, 184, 0) 70%);
-            top: -50%;
-            left: -50%;
-            animation: rotate 60s linear infinite;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: 
+                linear-gradient(to right, rgba(48, 54, 61, 0.1) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(48, 54, 61, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+            opacity: 0.4;
+            z-index: 0;
         }
-        
-        @keyframes rotate {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-        
+
         .logo {
-            font-size: 1.5rem;
-            font-weight: 800;
-            display: inline-flex;
-            align-items: center;
-            margin-bottom: 0.5rem;
-            color: var(--primary);
-            text-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .logo i {
-            margin-right: 0.5rem;
-            font-size: 1.8rem;
-        }
-        
-        h1 {
-            font-size: 1.8rem;
-            margin-bottom: 0.5rem;
+            font-size: 1.2rem; /* Reduced from 1.4rem */
             font-weight: 700;
+            letter-spacing: -0.5px;
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.3rem; /* Reduced from 0.5rem */
+            color: var(--text);
             position: relative;
             z-index: 1;
         }
-        
+
+        .logo i {
+            margin-right: 0.75rem;
+            font-size: 1.6rem;
+            color: var(--success);
+        }
+
+        h1 {
+            font-size: 1.5rem; /* Reduced from 1.75rem */
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            display: flex;
+            align-items: center;
+            margin-bottom: 0;
+            position: relative;
+            z-index: 1;
+        }
+
         .content {
-            padding: 1.5rem 2rem;
+            padding: 1rem 1.5rem;
         }
-        
+
         .status-card {
-            background-color: rgba(15, 23, 42, 0.6);
-            border-radius: 12px;
-            padding: 2rem;
+            background-color: #1a1d24;
+            border-radius: 6px;
+            padding: 1.25rem; /* Reduced from 2rem */
             text-align: center;
-            margin-bottom: 2rem;
-            transform: scale(0.98);
-            animation: pulse 2s infinite alternate;
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+            margin-bottom: 1.25rem; /* Reduced from 2rem */
+            border-left: 4px solid var(--accent);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            position: relative;
         }
-        
-        @keyframes pulse {
-            to {
-                transform: scale(1);
-                box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
-            }
+
+        /* Add subtle chart lines to status card */
+        .status-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: 
+                linear-gradient(to right, rgba(48, 54, 61, 0.07) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(48, 54, 61, 0.07) 1px, transparent 1px);
+            background-size: 10px 30px;
+            opacity: 0.5;
+            pointer-events: none;
         }
-        
+
         .status-indicator {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 0.7rem 1.8rem;
-            border-radius: 50px;
+            padding: 0.5rem 1.25rem; /* Reduced padding */
+            border-radius: 4px;
             font-weight: 700;
-            font-size: 1.2rem;
-            margin-bottom: 1rem;
+            font-size: 1.1rem; /* Slightly reduced */
+            margin-bottom: 0.75rem; /* Reduced */
             letter-spacing: 1px;
             position: relative;
             overflow: hidden;
+            border: 1px solid var(--border);
+            z-index: 1;
         }
-        
-        .status-indicator::before {
+
+        .status-indicator.online {
+            background-color: var(--success-light);
+            color: var(--success);
+            border-color: var(--success);
+        }
+
+        .status-indicator.offline {
+            background-color: var(--danger-light);
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+
+        .status-indicator::after {
             content: '';
             position: absolute;
             width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.2) 50%, rgba(255,255,255,0) 100%);
-            top: 0;
+            height: 200%;
+            top: -50%;
             left: -100%;
-            animation: shine 2s infinite;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            transform: rotate(35deg);
+            animation: shine 3s infinite;
         }
-        
+
         @keyframes shine {
             to {
                 left: 100%;
             }
         }
-        
-        .status-indicator.online {
-            background-color: var(--success);
-            color: white;
-        }
-        
-        .status-indicator.offline {
-            background-color: var(--danger);
-            color: white;
-        }
-        
+
         .status-message {
-            font-size: 1.1rem;
-            margin-bottom: 1rem;
+            font-size: 1rem; /* Reduced */
+            margin-bottom: 0.75rem; /* Reduced */
+            position: relative;
+            z-index: 1;
         }
-        
+
         .last-seen {
             color: var(--text-muted);
-            font-style: italic;
-            font-size: 0.9rem;
-            margin-top: 0.5rem;
+            font-size: 0.85rem; /* Reduced */
+            margin-top: 0.35rem; /* Reduced */
+            font-family: 'Fira Code', monospace;
+            position: relative;
+            z-index: 1;
         }
-        
+
+        /* Uptime bar styled like a trading chart */
         .uptime-bar {
-            background-color: rgba(15, 23, 42, 0.6);
-            border-radius: 8px;
-            height: 40px;
+            background-color: #1a1d24;
+            border-radius: 4px;
+            height: 30px; /* Reduced from 36px */
             overflow: hidden;
             position: relative;
-            margin-bottom: 2rem;
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1.25rem; /* Reduced from 2rem */
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--accent);
         }
-        
+
+        /* Add chart grid lines to uptime bar */
+        .uptime-bar::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: linear-gradient(to right, var(--chart-grid) 1px, transparent 1px);
+            background-size: 10% 100%;
+            opacity: 0.2;
+            pointer-events: none;
+            z-index: 1;
+        }
+
         .uptime-fill {
-            background: linear-gradient(90deg, #10b981, #34d399);
+            background: linear-gradient(90deg, var(--success), #4caf50);
             height: 100%;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+            border-radius: 4px 0 0 4px;
+            position: relative;
         }
-        
+
+        .uptime-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(to bottom, 
+                rgba(255, 255, 255, 0.1) 0%, 
+                rgba(255, 255, 255, 0) 50%,
+                rgba(0, 0, 0, 0.1) 100%);
+        }
+
         .uptime-text {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
             font-weight: 600;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
             letter-spacing: 0.5px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+            z-index: 2;
         }
-        
+
+        /* Information sections styled like trading terminals */
         .info-section {
-            background-color: rgba(15, 23, 42, 0.6);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            border-left: 4px solid var(--primary);
+            background-color: #1a1d24;
+            border-radius: 6px;
+            padding: 1.25rem; /* Reduced from 1.5rem */
+            margin-bottom: 1.25rem; /* Reduced from 1.5rem */
+            border: 1px solid var(--accent);
+            position: relative;
+            overflow: hidden;
         }
-        
+
+        /* Add faint grid lines like a trading terminal */
+        .info-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: 
+                linear-gradient(to right, rgba(48, 54, 61, 0.05) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(48, 54, 61, 0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+            opacity: 0.3;
+            pointer-events: none;
+        }
+
         .info-section h2 {
-            font-size: 1.2rem;
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
+            font-size: 1rem; /* Reduced from 1.1rem */
+            margin-bottom: 0.75rem; /* Reduced from 1rem */
+            padding-bottom: 0.4rem; /* Reduced from 0.5rem */
             border-bottom: 1px solid var(--border);
-            color: var(--primary);
+            display: flex;
+            align-items: center;
+            position: relative;
+            z-index: 1;
         }
-        
+
+        .info-section h2 i {
+            margin-right: 0.5rem;
+            color: var(--success);
+        }
+
         .info-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-            gap: 1rem;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); /* Changed from 250px */
+            gap: 0.5rem; /* Reduced from 0.75rem */
+            position: relative;
+            z-index: 1;
         }
-        
+
         .info-item {
             display: flex;
             flex-direction: column;
-            padding: 0.75rem;
-            border-radius: 8px;
-            background-color: rgba(30, 41, 59, 0.4);
-            transition: all 0.3s ease;
+            padding: 0.6rem; /* Reduced from 0.75rem */
+            border-radius: 4px;
+            background-color: #181e25;
+            border-left: 3px solid var(--accent);
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.3s ease, box-shadow 0.3s ease, border-left-color 0.3s ease;
         }
-        
+
         .info-item:hover {
-            background-color: rgba(30, 41, 59, 0.6);
+            background-color: #1e252e;
+            border-left-color: var(--success);
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         }
-        
+
+        /* Add subtle ticker style animation to info items on hover */
+        .info-item:hover::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--success), transparent);
+            animation: tickerScan 2s infinite;
+        }
+
+        @keyframes tickerScan {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
         .info-label {
             font-weight: 600;
             color: var(--text-muted);
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             margin-bottom: 0.25rem;
             display: flex;
             align-items: center;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        
+
         .info-label i {
             margin-right: 0.5rem;
-            color: var(--primary);
+            color: var(--success);
         }
-        
+
         .info-value {
             color: var(--text);
             font-family: 'Fira Code', monospace;
-            font-size: 0.95rem;
+            font-size: 0.9rem; /* Reduced from 0.95rem */
             word-break: break-all;
         }
-        
+
         .info-value a {
-            color: var(--primary);
+            color: var(--success);
             text-decoration: none;
         }
-        
+
         .info-value a:hover {
             text-decoration: underline;
         }
-        
+
+        /* History styled like a trading log */
         .history-section {
-            background-color: rgba(15, 23, 42, 0.6);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            background-color: #1a1d24;
+            border-radius: 6px;
+            padding: 1.25rem; /* Reduced from 1.5rem */
+            margin-bottom: 1.25rem; /* Reduced from 1.5rem */
+            border: 1px solid var(--accent);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
         }
-        
+
+        /* Add trading terminal style grid lines */
+        .history-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: 
+                linear-gradient(to right, rgba(48, 54, 61, 0.05) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(48, 54, 61, 0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+            opacity: 0.3;
+            pointer-events: none;
+        }
+
         .history-header {
-            font-size: 1.2rem;
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
+            font-size: 1rem; /* Reduced from 1.1rem */
+            margin-bottom: 0.75rem; /* Reduced from 1rem */
+            padding-bottom: 0.4rem; /* Reduced from 0.5rem */
             border-bottom: 1px solid var(--border);
-            color: var(--primary);
             display: flex;
             align-items: center;
+            position: relative;
+            z-index: 1;
         }
-        
+
         .history-header i {
             margin-right: 0.5rem;
+            color: var(--success);
         }
-        
+
         .history-entry {
-            padding: 0.75rem;
-            border-radius: 8px;
-            margin-bottom: 0.5rem;
+            padding: 0.6rem; /* Reduced from 0.75rem */
+            border-radius: 4px;
+            margin-bottom: 0.4rem; /* Reduced from 0.5rem */
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background-color: rgba(30, 41, 59, 0.4);
+            background-color: #181e25;
+            border-left: 3px solid transparent;
             animation: slideIn 0.3s ease;
             opacity: 0;
             animation-fill-mode: forwards;
+            position: relative;
+            z-index: 1;
+            transition: transform 0.2s ease;
         }
-        
+
+        .history-entry:hover {
+            transform: translateX(5px);
+        }
+
+        .history-entry.online {
+            border-left-color: var(--success);
+        }
+
+        .history-entry.offline {
+            border-left-color: var(--danger);
+        }
+
         @keyframes slideIn {
             from {
                 opacity: 0;
-                transform: translateY(10px);
+                transform: translateX(-10px);
             }
             to {
                 opacity: 1;
-                transform: translateY(0);
+                transform: translateX(0);
             }
         }
-        
-        .history-entry:nth-child(2) {
-            animation-delay: 0.1s;
-        }
-        
-        .history-entry:nth-child(3) {
-            animation-delay: 0.2s;
-        }
-        
-        .history-entry:nth-child(4) {
-            animation-delay: 0.3s;
-        }
-        
-        .history-entry:nth-child(5) {
-            animation-delay: 0.4s;
-        }
-        
+
+        .history-entry:nth-child(2) { animation-delay: 0.1s; }
+        .history-entry:nth-child(3) { animation-delay: 0.2s; }
+        .history-entry:nth-child(4) { animation-delay: 0.3s; }
+        .history-entry:nth-child(5) { animation-delay: 0.4s; }
+
         .history-timestamp {
             color: var(--text-muted);
-            font-size: 0.9rem;
+            font-size: 0.85rem;
+            font-family: 'Fira Code', monospace;
         }
-        
+
         .history-status {
             font-weight: 600;
-            padding: 0.25rem 0.75rem;
-            border-radius: 50px;
-            font-size: 0.8rem;
+            padding: 0.2rem 0.6rem; /* Reduced from 0.25rem 0.75rem */
+            border-radius: 3px;
+            font-size: 0.75rem;
             display: flex;
             align-items: center;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
         }
-        
+
         .history-status.online {
             color: var(--success);
-            background-color: rgba(16, 185, 129, 0.1);
+            background-color: var(--success-light);
+            border: 1px solid var(--success);
         }
-        
+
         .history-status.offline {
             color: var(--danger);
-            background-color: rgba(239, 68, 68, 0.1);
+            background-color: var(--danger-light);
+            border: 1px solid var(--danger);
         }
-        
+
         .history-status i {
             margin-right: 0.25rem;
         }
-        
+
         .connection-status {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 0.75rem;
-            background-color: rgba(15, 23, 42, 0.6);
-            border-radius: 8px;
-            font-size: 0.9rem;
+            padding: 0.5rem 0.75rem; /* Reduced from 0.75rem 1rem */
+            background-color: #1a1d24;
+            border-radius: 4px;
+            font-size: 0.85rem; /* Reduced from 0.9rem */
             color: var(--text-muted);
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem; /* Reduced from 1.5rem */
+            border: 1px solid var(--accent);
+            position: relative;
+            overflow: hidden;
         }
-        
+
+        /* Add ticker line animation to connection status */
+        .connection-status::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--text-muted), transparent);
+            animation: tickerScan 3s infinite linear;
+        }
+
         .connection-status i {
             margin-right: 0.25rem;
         }
-        
+
         .connected {
             color: var(--success);
         }
-        
+
         .disconnected {
             color: var(--danger);
         }
-        
-        .refresh-btn {
-            background-color: var(--primary);
-            color: white;
-            border: none;
-            padding: 0.75rem 1.5rem;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            margin-bottom: 1rem;
-        }
-        
-        .refresh-btn:hover {
-            background-color: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
-        }
-        
-        .refresh-btn i {
-            margin-right: 0.5rem;
-        }
-        
+
+        /* Refresh button removed */
+
         .footer {
             text-align: center;
             color: var(--text-muted);
-            font-size: 0.8rem;
-            padding-top: 1rem;
+            font-size: 0.75rem; /* Reduced from 0.8rem */
+            padding-top: 0.75rem; /* Reduced from 1rem */
             border-top: 1px solid var(--border);
         }
-        
+
         .realtime-badge {
             background-color: var(--success);
-            color: white;
+            color: black;
             font-size: 0.7rem;
             padding: 0.2rem 0.5rem;
-            border-radius: 50px;
+            border-radius: 3px;
             margin-left: 0.5rem;
             vertical-align: middle;
             letter-spacing: 0.5px;
             position: relative;
+            font-weight: 700;
         }
-        
+
         .realtime-badge::after {
             content: '';
             position: absolute;
             width: 6px;
             height: 6px;
-            background-color: white;
+            background-color: #000;
             border-radius: 50%;
             top: 50%;
             left: 8px;
             transform: translateY(-50%);
             animation: blink 2s infinite;
         }
-        
+
         @keyframes blink {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.3; }
         }
-        
+
+        /* Enhanced candlestick chart in the header */
+        .candlestick {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            display: flex;
+            align-items: flex-end;
+            height: 40px;
+            opacity: 0.6;
+            z-index: 1;
+        }
+
+        .candle {
+            width: 8px;
+            margin: 0 3px;
+            position: relative;
+            transition: height 0.5s ease;
+        }
+
+        .candle:hover {
+            height: 90% !important;
+        }
+
+        .candle::before, .candle::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            width: 2px;
+            background-color: currentColor;
+            transform: translateX(-50%);
+        }
+
+        .candle::before {
+            top: -5px;
+            height: 5px;
+        }
+
+        .candle::after {
+            bottom: -5px;
+            height: 5px;
+        }
+
+        .candle-up {
+            background-color: var(--success);
+            color: var(--success);
+        }
+
+        .candle-down {
+            background-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .candle-1 { height: 60%; }
+        .candle-2 { height: 40%; }
+        .candle-3 { height: 75%; }
+        .candle-4 { height: 30%; }
+        .candle-5 { height: 80%; }
+
         /* Mobile Responsiveness */
         @media (max-width: 768px) {
-            .header {
-                padding: 1.5rem;
-            }
-            
-            .content {
-                padding: 1.25rem;
-            }
-            
-            h1 {
-                font-size: 1.5rem;
-            }
-            
-            .logo {
-                font-size: 1.25rem;
-            }
-            
-            .info-grid {
-                grid-template-columns: 1fr;
-            }
+            .header { padding: 1.25rem; }
+            .content { padding: 1.25rem; }
+            h1 { font-size: 1.4rem; }
+            .logo { font-size: 1.2rem; }
+            .info-grid { grid-template-columns: 1fr; }
             
             .history-entry {
                 flex-direction: column;
@@ -602,37 +781,20 @@ STATUS_PAGE = '''
                 margin-top: 0.5rem;
             }
         }
-        
+
         @media (max-width: 480px) {
-            body {
-                padding: 0.5rem;
-            }
-            
-            .container {
-                width: 100%;
-                border-radius: 8px;
-            }
-            
-            .header {
-                padding: 1rem;
-            }
-            
-            .content {
-                padding: 1rem;
-            }
-            
-            .status-indicator {
-                padding: 0.6rem 1.5rem;
-                font-size: 1rem;
-            }
-            
-            .status-message {
-                font-size: 1rem;
-            }
-            
-            h1 {
-                font-size: 1.25rem;
-            }
+            body { padding: 0.5rem; }
+            .container { width: 100%; }
+            .header { padding: 1rem; }
+            .content { padding: 1rem; }
+            .status-indicator { padding: 0.5rem 1rem; font-size: 1rem; }
+            .status-message { font-size: 0.95rem; }
+            h1 { font-size: 1.2rem; }
+            .candlestick { display: none; }
+        }
+
+        .status-card, .uptime-bar, .info-section, .history-section, .connection-status {
+            margin-bottom: 0.75rem; /* Further reduced margins */
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
@@ -640,8 +802,16 @@ STATUS_PAGE = '''
 <body>
     <div class="container">
         <div class="header">
-            <div class="logo"><i class="fas fa-school"></i> Prodigy Trading Academy</div>
+            <div class="logo"><i class="fas fa-chart-line"></i> Prodigy Trading Academy</div>
             <h1>Bot Status Monitor <span class="realtime-badge">LIVE</span></h1>
+            
+            <div class="candlestick">
+                <div class="candle candle-up candle-1"></div>
+                <div class="candle candle-down candle-2"></div>
+                <div class="candle candle-up candle-3"></div>
+                <div class="candle candle-down candle-4"></div>
+                <div class="candle candle-up candle-5"></div>
+            </div>
         </div>
         
         <div class="content">
@@ -699,7 +869,7 @@ STATUS_PAGE = '''
                 <div id="history-entries">
                     {% for entry in status_history|reverse %}
                         {% if loop.index <= 10 %}
-                            <div class="history-entry" style="animation-delay: {{ loop.index * 0.1 }}s;">
+                            <div class="history-entry {{ 'online' if entry.status else 'offline' }}" style="animation-delay: {{ loop.index * 0.1 }}s;">
                                 <span class="history-timestamp">{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</span>
                                 <span class="history-status {{ 'online' if entry.status else 'offline' }}">
                                     <i class="fas {{ 'fa-circle-check' if entry.status else 'fa-circle-exclamation' }}"></i>
@@ -719,14 +889,9 @@ STATUS_PAGE = '''
                     <i class="fas fa-plug"></i> Connecting to server...
                 </div>
             </div>
-            
-            <button id="refresh-btn" class="refresh-btn">
-                <i class="fas fa-sync-alt"></i> Refresh Page
-            </button>
-            
+
             <div class="footer">
-                <p>This status page automatically updates in real-time</p>
-                <p>© {{ datetime.now().year }} Prodigy Trading Academy | Bot Version: Alpha Release 3.0</p>
+                <p>© {{ datetime.now().year }} Prodigy Trading Academy | Bot Version: Alpha Release 3.1</p>
             </div>
         </div>
     </div>
@@ -799,7 +964,7 @@ STATUS_PAGE = '''
                 
                 data.recent_history.forEach((entry, index) => {
                     const entryElement = document.createElement('div');
-                    entryElement.className = 'history-entry';
+                    entryElement.className = `history-entry ${entry.status ? 'online' : 'offline'}`;
                     entryElement.style.animationDelay = `${index * 0.1}s`;
                     
                     const timestampSpan = document.createElement('span');
@@ -879,7 +1044,7 @@ if __name__ == '__main__':
         # Use Waitress in production
         from waitress import serve
         print(f"Starting production server on port {port}")
-        serve(app, host='0.0.0.0', port=port)
+        serve(socketio.wsgi_app, host='0.0.0.0', port=port)  # Note the socketio.wsgi_app here
     else:
         # Use development server locally
         socketio.run(app, host='0.0.0.0', port=port, debug=False)

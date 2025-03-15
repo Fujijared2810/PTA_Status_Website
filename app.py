@@ -13,9 +13,14 @@ app.config['SECRET_KEY'] = 'ptastatus-secret-key'
 # Initialize socketio differently based on environment
 is_production = os.environ.get('RENDER', False)
 if is_production:
-    # In production: use long polling only (no WebSockets)
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', 
-                       transport=['polling'], engineio_logger=False)
+    # In production: completely disable WebSockets
+    socketio = SocketIO(app, 
+                       cors_allowed_origins="*", 
+                       async_mode='threading',
+                       transport=['polling'],
+                       allow_upgrades=False,  # Prevent upgrading from polling to WebSockets
+                       engineio_logger=False,
+                       logger=False)
 else:
     # In development: use default settings
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -1054,11 +1059,16 @@ if __name__ == '__main__':
     log.setLevel(logging.ERROR)
     
     if is_production:
+        # Silence all engineio and socketio errors in production
+        logging.getLogger('engineio').setLevel(logging.ERROR)
+        logging.getLogger('socketio').setLevel(logging.ERROR)
+        logging.getLogger('waitress').setLevel(logging.ERROR)
+        
         # Use Waitress in production
         from waitress import serve
         print(f"Starting production server on port {port}")
         
-        # Serve the application with Waitress (no need to redefine socketio)
+        # Serve the application with Waitress
         serve(app, host='0.0.0.0', port=port)
     else:
         # Use development server locally

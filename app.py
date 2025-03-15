@@ -6,9 +6,17 @@ import threading
 from datetime import datetime
 import os
 import platform
+from flask import request, jsonify
+from flask import redirect, session, request, url_for
+from functools import wraps
+from flask_session import Session
+from flask import flash
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'ptastatus-secret-key'
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SECRET_KEY'] = 'ptastatus-secret-key'
+Session(app)
 
 # Initialize socketio differently based on environment
 is_production = os.environ.get('RENDER', False)
@@ -29,6 +37,8 @@ else:
 BOT_URL = os.environ.get('BOT_URL', "http://127.0.0.1:8081/")  # Use environment variable in production
 BOT_NAME = "@PTAStudentBot"  # Add this line
 TELEGRAM_BOT_LINK = "https://t.me/PTAStudentBot"  # Add this line - note: no @ symbol in the URL
+TURNSTILE_SITE_KEY = os.environ.get('TURNSTILE_SITE_KEY', '')
+TURNSTILE_SECRET_KEY = os.environ.get('TURNSTILE_SECRET_KEY', '')
 CHECK_INTERVAL = 10  # Check every 10 seconds for more responsive updates
 MAX_HISTORY_ENTRIES = 100
 
@@ -39,6 +49,40 @@ last_online = None
 status_history = []
 uptime_percentage = 100.0
 start_time = datetime.now()
+
+def verify_turnstile_token(token):
+    """Verify Cloudflare Turnstile token with Cloudflare API"""
+    try:
+        data = {
+            'secret': TURNSTILE_SECRET_KEY,
+            'response': token,
+            'remoteip': request.remote_addr
+        }
+        response = requests.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data=data)
+        result = response.json()
+        return result.get('success', False)
+    except Exception as e:
+        print(f"Turnstile verification error: {e}")
+        return False
+    
+# Add near the top of your file with other configuration
+DEBUG_MODE = not is_production  # True in development, False in production
+
+# Then modify the human_required decorator
+def human_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Skip verification in debug mode
+        if DEBUG_MODE and not TURNSTILE_SITE_KEY:
+            return f(*args, **kwargs)
+            
+        if request.cookies.get('human_verified') != '1':
+            # Store intended destination
+            session['next'] = request.url
+            return redirect(url_for('verify_page'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 def check_bot_status():
     global last_check, is_online, last_online, status_history, uptime_percentage
@@ -125,6 +169,118 @@ def check_bot_status():
             })
         
         time.sleep(CHECK_INTERVAL)
+
+VERIFY_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verify - PTA Bot Status</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <style>
+        /* Copy relevant styles from STATUS_PAGE */
+        :root {
+            --success: #00c853;
+            --background: #0d1117;
+            --card-bg: #161b22;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --border: rgba(255, 255, 255, 0.1);
+            --accent: #30363d;
+        }
+        
+        body {
+            font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+            background: var(--background);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 1rem;
+            line-height: 1.6;
+        }
+        
+        .container {
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 500px;
+            border: 1px solid var(--accent);
+            padding: 2rem;
+            text-align: center;
+        }
+        
+        h1 {
+            margin-bottom: 1rem;
+            color: var(--text);
+        }
+        
+        p {
+            margin-bottom: 2rem;
+            color: var(--text-muted);
+        }
+        
+        #verification-form {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        button {
+            margin-top: 1.5rem;
+            padding: 0.75rem 1.5rem;
+            background: var(--success);
+            color: black;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Verification Required</h1>
+        <p>Please complete the verification below to access the PTA Bot Status page.</p>
+        
+        <form id="verification-form" method="POST" action="/verify-human">
+            <div class="cf-turnstile" data-sitekey="{{ site_key }}" data-callback="turnstileCallback"></div>
+            <button type="submit" id="submit-button" disabled>Continue to Site</button>
+        </form>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // For debugging - if in debug mode with no key, just enable the button
+            if ("{{ site_key }}" === "") {
+                document.getElementById('submit-button').disabled = false;
+            }
+            
+            // Add hidden field for token
+            const form = document.getElementById('verification-form');
+            const hiddenField = document.createElement('input');
+            hiddenField.type = 'hidden';
+            hiddenField.name = 'cf-turnstile-response';
+            hiddenField.id = 'cf-turnstile-response';
+            form.appendChild(hiddenField);
+        });
+        
+        function turnstileCallback(token) {
+            document.getElementById('cf-turnstile-response').value = token;
+            document.getElementById('submit-button').disabled = false;
+        }
+    </script>
+</body>
+</html>
+'''
 
 # HTML template for status page (enhanced with real-time updates)
 STATUS_PAGE = '''
@@ -1014,8 +1170,8 @@ STATUS_PAGE = '''
 </body>
 </html>
 '''
-
 @app.route('/')
+@human_required
 def home():
     # Get environment information
     environment_info = f"{platform.system()} {platform.release()}"
@@ -1036,6 +1192,28 @@ def home():
         str=str,
         environment_info=environment_info
     )
+
+@app.route('/verify-human', methods=['POST'])
+def verify_human():
+    token = request.form.get('cf-turnstile-response')
+    if not token:
+        return jsonify({'success': False, 'message': 'No token provided'}), 400
+    
+    is_human = verify_turnstile_token(token)
+    if is_human:
+        # Set a cookie to remember verification
+        next_url = session.get('next', url_for('home'))
+        response = redirect(next_url)
+        response.set_cookie('human_verified', '1', max_age=3600, httponly=True, samesite='Lax')
+        return response
+    else:
+        # If verification failed, redirect back to verification page
+        flash('Verification failed. Please try again.')
+        return redirect(url_for('verify_page'))
+    
+@app.route('/verify')
+def verify_page():
+    return render_template_string(VERIFY_PAGE, site_key=TURNSTILE_SITE_KEY)
 
 # Start monitoring thread
 @socketio.on('connect')

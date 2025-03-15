@@ -1045,9 +1045,14 @@ if __name__ == '__main__':
         from waitress import serve
         print(f"Starting production server on port {port}")
         
-        # Get the WSGI app - use the correct method depending on Flask-SocketIO version
-        wsgi_app = socketio.get_wsgi_app(app) if hasattr(socketio, 'get_wsgi_app') else app
-        serve(wsgi_app, host='0.0.0.0', port=port)
+        # Use long polling instead of WebSockets in production with Waitress
+        socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+        
+        # Ensure engineio is properly initialized
+        socketio.init_app(app, async_mode='threading')
+        
+        # Serve the application with Waitress
+        serve(app, host='0.0.0.0', port=port)
     else:
         # Use development server locally
         socketio.run(app, host='0.0.0.0', port=port, debug=False)

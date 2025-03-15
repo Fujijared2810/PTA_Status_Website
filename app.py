@@ -1041,12 +1041,13 @@ if __name__ == '__main__':
     log.setLevel(logging.ERROR)
     
     if is_production:
-        # Use Waitress in production with the correct WSGI app
+        # Use Waitress in production
         from waitress import serve
         print(f"Starting production server on port {port}")
-        # Fix: Use the proper way to get the WSGI app for Socket.IO
-        app.wsgi_app = socketio.middleware(app.wsgi_app)
-        serve(app, host='0.0.0.0', port=port)
+        
+        # Get the WSGI app - use the correct method depending on Flask-SocketIO version
+        wsgi_app = socketio.get_wsgi_app(app) if hasattr(socketio, 'get_wsgi_app') else app
+        serve(wsgi_app, host='0.0.0.0', port=port)
     else:
         # Use development server locally
         socketio.run(app, host='0.0.0.0', port=port, debug=False)

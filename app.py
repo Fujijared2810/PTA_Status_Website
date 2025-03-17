@@ -7,6 +7,9 @@ from datetime import datetime
 import os
 import platform
 import pytz
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+import atexit
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'ptastatus-secret-key'
@@ -27,11 +30,12 @@ else:
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Configuration
-BOT_URL = os.environ.get('BOT_URL', "https://ptabot-status-website.onrender.com/")  # Use environment variable in production
+BOT_URL = os.environ.get('BOT_URL', "http://localhost:8081")  # Use environment variable in production
 BOT_NAME = "@PTAStudentBot"  # Add this line
 TELEGRAM_BOT_LINK = "https://t.me/PTAStudentBot"  # Add this line - note: no @ symbol in the URL
 CHECK_INTERVAL = 1  # Check every 10 seconds for more responsive updates
 MAX_HISTORY_ENTRIES = 100
+APP_URL = os.environ.get('APP_URL', "https://ptabot-status-website.onrender.com/")
 
 # Status tracking
 last_check = None
@@ -40,6 +44,70 @@ last_online = None
 status_history = []
 uptime_percentage = 100.0
 start_time = datetime.now()
+
+# Initialize the scheduler
+scheduler = BackgroundScheduler()
+
+# Function to ping our own app and keep it alive
+def ping_self():
+    try:
+        print(f"Self-ping: Pinging {APP_URL} to keep server alive...")
+        response = requests.get(APP_URL, timeout=10)
+        print(f"Self-ping result: {response.status_code}")
+    except Exception as e:
+        print(f"Self-ping error: {e}")
+
+# Add this new function after ping_self() function
+def reset_uptime_calculation():
+    """Reset the uptime percentage calculation every 4 hours"""
+    global status_history, uptime_percentage
+    
+    print("Scheduled task: Resetting uptime calculation...")
+    
+    # Keep the full history for display purposes, but only count recent entries for uptime
+    if status_history:
+        # Calculate new uptime based on entries from the last 4 hours only
+        now = datetime.now(pytz.timezone('Asia/Manila'))
+        four_hours_ago = now - datetime.timedelta(hours=4)
+        
+        # Filter recent entries
+        recent_entries = [entry for entry in status_history if entry['timestamp'] >= four_hours_ago]
+        
+        if recent_entries:
+            online_count = sum(1 for entry in recent_entries if entry['status'])
+            uptime_percentage = (online_count / len(recent_entries)) * 100
+        else:
+            # If no entries in last 4 hours, reset to default
+            uptime_percentage = 100.0 if is_online else 0.0
+            
+        print(f"Uptime calculation reset. New uptime: {uptime_percentage:.2f}%")
+    else:
+        # If no history at all, set based on current status
+        uptime_percentage = 100.0 if is_online else 0.0
+
+# Add this after the existing ping_self scheduler job
+scheduler.add_job(
+    func=reset_uptime_calculation,
+    trigger=IntervalTrigger(hours=4),
+    id='reset_uptime_job',
+    name='Reset uptime calculation every 4 hours',
+    replace_existing=True
+)
+
+# Add the job to the scheduler - ping every 14 minutes (same as your JS example)
+scheduler.add_job(
+    func=ping_self,
+    trigger=IntervalTrigger(minutes=14),
+    id='ping_job',
+    name='Ping self every 14 minutes to keep alive',
+    replace_existing=True
+)
+
+# Start the scheduler when the app starts
+scheduler.start()
+
+# Shut down the scheduler when exiting the app
+atexit.register(lambda: scheduler.shutdown())
 
 def ph_time_format(dt):
     """Convert datetime to Philippine time and format in 12-hour format"""
@@ -591,15 +659,36 @@ STATUS_PAGE = '''
         }
 
         .history-entries {
-            max-height: 500px;
+            max-height: 300px; /* Reduced from 500px for better display */
             opacity: 1;
-            overflow: hidden;
+            overflow-y: auto; /* Changed from hidden to auto to enable scrolling */
             transition: max-height 0.5s ease, opacity 0.4s ease;
+            padding-right: 4px; /* Add slight padding to prevent content touching scrollbar */
+        }
+
+        /* Custom scrollbar styling for WebKit browsers */
+        .history-entries::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .history-entries::-webkit-scrollbar-track {
+            background: #1a1d24;
+            border-radius: 3px;
+        }
+
+        .history-entries::-webkit-scrollbar-thumb {
+            background: var(--accent-light);
+            border-radius: 3px;
+        }
+
+        .history-entries::-webkit-scrollbar-thumb:hover {
+            background: var(--success);
         }
 
         .history-entries.collapsed {
             max-height: 0;
             opacity: 0;
+            overflow: hidden; /* When collapsed, hide overflow */
         }
 
         .history-header[data-expanded="true"] .toggle-icon {

@@ -8,3 +8,4 @@ simple-websocket==0.5.1
 waitress==2.0.0
 flask-session
 pytz
+apscheduler

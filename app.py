@@ -91,10 +91,13 @@ def reset_uptime_calculation():
     if status_history:
         # Calculate new uptime based on entries from the last 4 hours only
         now = datetime.now(pytz.timezone('Asia/Manila'))
-        four_hours_ago = now - timedelta(hours=4)  # Fix here - use timedelta directly
+        four_hours_ago = now - timedelta(hours=4)
         
-        # Filter recent entries
-        recent_entries = [entry for entry in status_history if entry['timestamp'] >= four_hours_ago]
+        # Ensure all timestamps in status_history are timezone-aware
+        recent_entries = [
+            entry for entry in status_history 
+            if entry['timestamp'].replace(tzinfo=pytz.timezone('Asia/Manila')) >= four_hours_ago
+        ]
         
         if recent_entries:
             online_count = sum(1 for entry in recent_entries if entry['status'])

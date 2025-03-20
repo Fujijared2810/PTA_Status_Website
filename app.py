@@ -3,13 +3,15 @@ from flask_socketio import SocketIO
 import requests
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import platform
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
+import requests
+import re
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'ptastatus-secret-key'
@@ -29,7 +31,28 @@ else:
     # In development: use default settings
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
+def get_bot_version():
+    """Fetch the bot version from GitHub repository"""
+    try:
+        # Replace with the actual path to your file containing BOT_VERSION
+        github_file_url = "https://raw.githubusercontent.com/Fujijared2810/PTABot/refs/heads/main/bot.py"
+        response = requests.get(github_file_url, timeout=5)
+        
+        if response.status_code == 200:
+            # Look for BOT_VERSION in the file content
+            version_match = re.search(r'BOT_VERSION\s*=\s*["\']([^"\']+)["\']', response.text)
+            if version_match:
+                return version_match.group(1)
+            
+        # Fallback to environment variable if GitHub fetch fails
+        return os.environ.get('BOT_VERSION', 'Alpha Release 4.1')
+    except Exception as e:
+        print(f"Error fetching bot version: {e}")
+        # Return a default or environment value as fallback
+        return os.environ.get('BOT_VERSION', 'Alpha Release 4.1')
+
 # Configuration
+BOT_VERSION = get_bot_version()
 BOT_URL = os.environ.get('BOT_URL', "http://localhost:8081")  # Use environment variable in production
 BOT_NAME = "@PTAStudentBot"  # Add this line
 TELEGRAM_BOT_LINK = "https://t.me/PTAStudentBot"  # Add this line - note: no @ symbol in the URL
@@ -68,7 +91,7 @@ def reset_uptime_calculation():
     if status_history:
         # Calculate new uptime based on entries from the last 4 hours only
         now = datetime.now(pytz.timezone('Asia/Manila'))
-        four_hours_ago = now - datetime.timedelta(hours=4)
+        four_hours_ago = now - timedelta(hours=4)  # Fix here - use timedelta directly
         
         # Filter recent entries
         recent_entries = [entry for entry in status_history if entry['timestamp'] >= four_hours_ago]
@@ -1096,7 +1119,7 @@ STATUS_PAGE = '''
             </div>
 
             <div class="footer">
-                <p>© {{ datetime.now().year }} Prodigy Trading Academy | Bot Version: Alpha Release 3.1</p>
+                <p>© {{ datetime.now().year }} Prodigy Trading Academy | Bot Version: {{ bot_version }}</p>
             </div>
         </div>
     </div>
@@ -1357,7 +1380,8 @@ def home():
         datetime=datetime,
         str=str,
         environment_info=environment_info,
-        ph_time_format=ph_time_format
+        ph_time_format=ph_time_format,
+        bot_version=BOT_VERSION
     )
 
 # Start monitoring thread
